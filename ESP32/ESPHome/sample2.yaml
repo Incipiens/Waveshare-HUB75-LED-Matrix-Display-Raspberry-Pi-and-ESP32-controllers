@@ -1,0 +1,199 @@
+esphome:
+  name: matrix-display
+  friendly_name: Matrix Display
+
+
+external_components:
+  - source: github://TillFleisch/ESPHome-HUB75-MatrixDisplayWrapper@main
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+color:
+  - id: purple
+    red: 100%
+    green: 0%
+    blue: 100%
+
+image:
+  - file: "out4.jpg" # place in /esphome/config (or the folder of your yaml file, if it's different)
+    type: RGB
+    id: bg
+    resize: 64x32
+
+font:
+  # gfonts://family[@weight]
+  - file: "gfonts://Open Sans"
+    id: roboto
+    size: 10
+  - file: "gfonts://Open Sans"
+    id: font_clock
+    size: 12
+  - file: "gfonts://Open Sans"
+    id: font_scroll
+    size: 12
+
+
+text:
+  - platform: template
+    id: marquee_text
+    mode: text
+    name: "Scrolling Text"
+    max_length: 128
+    restore_value: true
+    optimistic: true
+    on_value:
+      then:
+        - lambda: |-
+            // Measure and cache the new string pixel width
+            int x1, y1, w, h;
+            using namespace esphome::display;
+            id(matrix)->get_text_bounds(
+                0, 0,
+                x.c_str(), // x = new text
+                id(font_scroll),
+                TextAlign::TEXT_ALIGN_LEFT,
+                &x1, &y1, &w, &h);
+            id(text_width) = w;
+            id(scroll_x) = id(matrix)->get_width();  // restart off‑screen
+        - script.execute: refresh_display  
+
+  - platform: template
+    id: bg_image_url
+    mode: text
+    name: "Background Image URL"
+    max_length: 255
+    restore_value: true
+    optimistic: true
+    on_value:
+      then:
+        - online_image.set_url:  # retarget
+            id: bg_image
+            url: !lambda 'return x;'  # x = new URL
+        - component.update: bg_image
+        - script.execute: refresh_display
+
+
+globals:
+  - id: scroll_x
+    type: int
+    initial_value: "64"
+  - id: text_width
+    type: int
+    initial_value: "0"
+
+interval:
+  - interval: 40ms
+    then:
+      - lambda: |-
+          id(scroll_x)--;
+          if (id(scroll_x) < -id(text_width))
+            id(scroll_x) = id(matrix)->get_width();
+      - script.execute: refresh_display
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: "Europe/Dublin"
+
+http_request:
+  verify_ssl: false
+
+online_image:
+  - id: bg_image
+    url: "https://esphome.io/_static/logo.png"   # placeholder 
+    resize: 64x32
+    format: JPEG
+    type: RGB
+    update_interval: never
+    on_download_finished:  # redraw when image dl
+      then:
+        - script.execute: refresh_display
+
+display:
+  - platform: hub75_matrix_display
+    id: matrix
+    rotation: 0
+    width: 64
+    height: 32
+    R1_pin: 25
+    G1_pin: 27
+    B1_pin: 26
+    R2_pin: 14
+    G2_pin: 13
+    B2_pin: 12
+    A_pin: 22
+    B_pin: 32
+    C_pin: 33
+    D_pin: 17
+    E_pin: 21
+    LAT_pin: 4
+    OE_pin: 15
+    CLK_pin: 16
+
+    lambda: |-
+      it.fill(Color::BLACK);
+      
+      it.image(0, 0, id(bg));
+      it.printf(id(scroll_x), 10, id(font_scroll), Color(255,255,0),
+                "%s", id(marquee_text).state.c_str());
+      if (id(show_clock).state) {
+        it.strftime(0, 0, id(font_clock), Color(255,0,0),
+                    "%H:%M:%S", id(sntp_time).now());
+      }
+  
+script:
+  - id: refresh_display
+    mode: restart
+    then:
+      - component.update: matrix
+
+switch:
+  - platform: hub75_matrix_display
+    matrix_id: matrix
+    name: "Power"
+    id: power
+  - platform: template
+    id: show_clock
+    name: "Show Clock"
+    restore_mode: RESTORE_DEFAULT_ON
+    optimistic: true
+    on_turn_on:
+      - script.execute: refresh_display
+    on_turn_off:
+      - script.execute: refresh_display
+
+number:
+  - platform: hub75_matrix_display
+    matrix_id: matrix
+    name: "Brightness"
+
+web_server:
+  port: 80
+  version: 3
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "x="
+
+ota:
+  - platform: esphome
+    password: "x"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  output_power: 8.5dB
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Matrix-Display Fallback Hotspot"
+    password: "x"
+
+captive_portal:
